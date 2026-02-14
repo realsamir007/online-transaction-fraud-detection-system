@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 import numpy as np
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import app.main as main_module
@@ -12,6 +13,7 @@ from app.database import DatabaseError
 from app.model_loader import ModelArtifacts
 from app.rate_limit import RateLimitSettings
 from app.risk_engine import RiskThresholds
+from app.security import AuthMode, AuthSettings
 
 
 FEATURE_NAMES = [
@@ -50,6 +52,7 @@ VALID_PAYLOAD = {
 }
 
 AUTH_HEADERS = {"X-API-Key": "test-api-key"}
+JWT_AUTH_HEADERS = {"Authorization": "Bearer valid-jwt-token"}
 
 
 class FakeScaler:
@@ -76,11 +79,22 @@ class FakeRepository:
     def __init__(self, should_fail: bool = False) -> None:
         self.should_fail = should_fail
         self.rows: list[dict] = []
+        self.client = object()
 
     def insert_transaction(self, payload: dict) -> None:
         if self.should_fail:
             raise DatabaseError("forced insert failure for test")
         self.rows.append(payload)
+
+
+class FakeTokenVerifier:
+    def __init__(self, valid_tokens: dict[str, dict] | None = None) -> None:
+        self.valid_tokens = valid_tokens or {"valid-jwt-token": {"id": "user-123"}}
+
+    def verify_access_token(self, access_token: str) -> dict:
+        if access_token in self.valid_tokens:
+            return self.valid_tokens[access_token]
+        raise HTTPException(status_code=401, detail="Invalid or expired Bearer token.")
 
 
 @contextmanager
@@ -89,10 +103,13 @@ def test_client(
     db_should_fail: bool = False,
     thresholds: RiskThresholds | None = None,
     rate_limit_settings: RateLimitSettings | None = None,
+    auth_settings: AuthSettings | None = None,
+    token_verifier: FakeTokenVerifier | None = None,
 ):
     scaler = FakeScaler()
     model = FakeModel(fraud_probability=fraud_probability)
     repository = FakeRepository(should_fail=db_should_fail)
+    fake_token_verifier = token_verifier or FakeTokenVerifier()
     artifacts = ModelArtifacts(model=model, scaler=scaler, feature_names=FEATURE_NAMES)
 
     with patch.object(main_module, "load_artifacts", lambda models_dir: artifacts):
@@ -107,20 +124,26 @@ def test_client(
                 )
             ),
         ):
-            with patch.object(main_module, "load_api_keys", lambda: ("test-api-key",)):
-                with patch.object(
-                    main_module,
-                    "_load_risk_thresholds",
-                    lambda: thresholds or RiskThresholds(low=0.30, high=0.70),
-                ):
+            with patch.object(
+                main_module,
+                "load_auth_settings",
+                lambda: auth_settings or AuthSettings(mode=AuthMode.HYBRID, api_keys=("test-api-key",)),
+            ):
+                with patch.object(main_module, "SupabaseUserTokenVerifier", lambda client: fake_token_verifier):
                     with patch.object(
                         main_module,
-                        "_load_rate_limit_settings",
-                        lambda: rate_limit_settings or RateLimitSettings(enabled=True, requests=60, window_seconds=60),
+                        "_load_risk_thresholds",
+                        lambda: thresholds or RiskThresholds(low=0.30, high=0.70),
                     ):
-                        with patch.object(main_module, "SupabaseTransactionRepository", lambda config: repository):
-                            with TestClient(main_module.app) as client:
-                                yield client, scaler, repository
+                        with patch.object(
+                            main_module,
+                            "_load_rate_limit_settings",
+                            lambda: rate_limit_settings
+                            or RateLimitSettings(enabled=True, requests=60, window_seconds=60),
+                        ):
+                            with patch.object(main_module, "SupabaseTransactionRepository", lambda config: repository):
+                                with TestClient(main_module.app) as client:
+                                    yield client, scaler, repository
 
 
 class FraudApiTests(unittest.TestCase):
@@ -225,6 +248,26 @@ class FraudApiTests(unittest.TestCase):
         self.assertEqual(second.status_code, 429)
         self.assertEqual(second.json()["detail"], "Rate limit exceeded. Please retry later.")
         self.assertTrue(second.headers.get("retry-after"))
+
+    def test_predict_transaction_jwt_success(self) -> None:
+        jwt_only = AuthSettings(mode=AuthMode.JWT, api_keys=tuple())
+        with test_client(fraud_probability=0.82, auth_settings=jwt_only) as (client, _, _):
+            response = client.post("/predict-transaction", json=VALID_PAYLOAD, headers=JWT_AUTH_HEADERS)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["risk_level"], "HIGH")
+
+    def test_predict_transaction_jwt_invalid(self) -> None:
+        jwt_only = AuthSettings(mode=AuthMode.JWT, api_keys=tuple())
+        with test_client(fraud_probability=0.82, auth_settings=jwt_only) as (client, _, _):
+            response = client.post(
+                "/predict-transaction",
+                json=VALID_PAYLOAD,
+                headers={"Authorization": "Bearer invalid-token"},
+            )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("Invalid or expired Bearer token.", response.json()["detail"])
 
 
 if __name__ == "__main__":

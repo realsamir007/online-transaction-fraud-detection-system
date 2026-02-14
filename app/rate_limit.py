@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import math
 import time
 from collections import defaultdict, deque
@@ -8,7 +9,7 @@ from threading import Lock
 
 from fastapi import HTTPException, Request
 
-from app.security import API_KEY_HEADER_NAME
+from app.security import API_KEY_HEADER_NAME, AUTHORIZATION_HEADER_NAME
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,20 @@ class InMemoryRateLimiter:
             return True, 0
 
 
+def _resolve_identity_key(request: Request) -> str:
+    api_key = request.headers.get(API_KEY_HEADER_NAME, "").strip()
+    if api_key:
+        return "api_key:" + hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+
+    auth_header = request.headers.get(AUTHORIZATION_HEADER_NAME, "").strip()
+    if auth_header.lower().startswith("bearer "):
+        bearer_token = auth_header[7:].strip()
+        if bearer_token:
+            return "bearer:" + hashlib.sha256(bearer_token.encode("utf-8")).hexdigest()[:16]
+
+    return "anonymous"
+
+
 def enforce_prediction_rate_limit(request: Request) -> None:
     settings: RateLimitSettings | None = getattr(request.app.state, "rate_limit_settings", None)
     if not settings or not settings.enabled:
@@ -61,8 +76,8 @@ def enforce_prediction_rate_limit(request: Request) -> None:
         raise HTTPException(status_code=500, detail="Rate limiter is not configured.")
 
     client_ip = request.client.host if request.client else "unknown"
-    api_key = request.headers.get(API_KEY_HEADER_NAME, "").strip() or "anonymous"
-    limit_key = f"{client_ip}:{api_key}"
+    identity_key = _resolve_identity_key(request)
+    limit_key = f"{client_ip}:{identity_key}"
 
     allowed, retry_after = rate_limiter.check_and_consume(limit_key)
     if not allowed:
@@ -71,4 +86,3 @@ def enforce_prediction_rate_limit(request: Request) -> None:
             detail="Rate limit exceeded. Please retry later.",
             headers={"Retry-After": str(retry_after)},
         )
-

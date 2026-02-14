@@ -3,3 +3,5 @@
 __pycache__/
 .DS_Store
 cleaned_dataset/
+frontend/node_modules/
+frontend/dist/

@@ -18,7 +18,12 @@ from app.database import DatabaseError, SupabaseConfig, SupabaseTransactionRepos
 from app.model_loader import load_artifacts
 from app.rate_limit import InMemoryRateLimiter, RateLimitSettings, enforce_prediction_rate_limit
 from app.risk_engine import RiskThresholds, evaluate_risk
-from app.security import load_api_keys, require_prediction_api_key
+from app.security import (
+    AuthContext,
+    SupabaseUserTokenVerifier,
+    authenticate_prediction_request,
+    load_auth_settings,
+)
 
 load_dotenv()
 
@@ -80,7 +85,12 @@ class PredictionResponse(BaseModel):
 
 def _parse_cors_origins(raw_origins: str | None) -> list[str]:
     if not raw_origins:
-        return ["http://localhost:3000", "http://127.0.0.1:3000"]
+        return [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ]
     if raw_origins.strip() == "*":
         return ["*"]
     return [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
@@ -144,7 +154,8 @@ async def lifespan(app: FastAPI):
 
     artifacts = load_artifacts(models_dir=models_dir)
     repository = SupabaseTransactionRepository(config=SupabaseConfig.from_env())
-    prediction_api_keys = load_api_keys()
+    auth_settings = load_auth_settings()
+    user_token_verifier = SupabaseUserTokenVerifier(repository.client) if auth_settings.allow_jwt else None
     risk_thresholds = _load_risk_thresholds()
     rate_limit_settings = _load_rate_limit_settings()
     rate_limiter = InMemoryRateLimiter(settings=rate_limit_settings)
@@ -154,7 +165,8 @@ async def lifespan(app: FastAPI):
     app.state.feature_names = artifacts.feature_names
     app.state.model_version = model_version
     app.state.transaction_repo = repository
-    app.state.prediction_api_keys = prediction_api_keys
+    app.state.auth_settings = auth_settings
+    app.state.user_token_verifier = user_token_verifier
     app.state.risk_thresholds = risk_thresholds
     app.state.rate_limit_settings = rate_limit_settings
     app.state.rate_limiter = rate_limiter
@@ -222,7 +234,7 @@ def health_check() -> dict[str, str]:
 def predict_transaction(
     request: Request,
     payload: TransactionFeatures,
-    _: None = Depends(require_prediction_api_key),
+    auth_context: AuthContext = Depends(authenticate_prediction_request),
     __: None = Depends(enforce_prediction_rate_limit),
 ) -> PredictionResponse:
     request_id = getattr(request.state, "request_id", "unknown")
@@ -245,8 +257,10 @@ def predict_transaction(
         }
         app.state.transaction_repo.insert_transaction(db_record)
         logger.info(
-            "prediction_scored request_id=%s fraud_probability=%.6f risk_level=%s action=%s",
+            "prediction_scored request_id=%s auth_method=%s principal=%s fraud_probability=%.6f risk_level=%s action=%s",
             request_id,
+            auth_context.auth_method,
+            auth_context.principal,
             fraud_probability,
             decision.risk_level,
             decision.action,
