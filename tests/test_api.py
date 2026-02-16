@@ -219,6 +219,26 @@ class FraudApiTests(unittest.TestCase):
         self.assertEqual(body["risk_level"], "MEDIUM")
         self.assertEqual(body["action"], "TRIGGER_MFA")
 
+    def test_predict_transaction_low_threshold_is_inclusive(self) -> None:
+        custom_thresholds = RiskThresholds(low=0.10, high=0.50)
+        with test_client(fraud_probability=0.10, thresholds=custom_thresholds) as (client, _, _):
+            response = client.post("/predict-transaction", json=VALID_PAYLOAD, headers=AUTH_HEADERS)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["risk_level"], "LOW")
+        self.assertEqual(body["action"], "APPROVE")
+
+    def test_predict_transaction_high_threshold_is_inclusive_for_medium(self) -> None:
+        custom_thresholds = RiskThresholds(low=0.10, high=0.50)
+        with test_client(fraud_probability=0.50, thresholds=custom_thresholds) as (client, _, _):
+            response = client.post("/predict-transaction", json=VALID_PAYLOAD, headers=AUTH_HEADERS)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["risk_level"], "MEDIUM")
+        self.assertEqual(body["action"], "TRIGGER_MFA")
+
     def test_health_has_request_id_header(self) -> None:
         with test_client() as (client, _, _):
             response = client.get("/health")

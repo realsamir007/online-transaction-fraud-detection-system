@@ -12,8 +12,8 @@ class RiskDecision:
 
 @dataclass(frozen=True)
 class RiskThresholds:
-    low: float = 0.30
-    high: float = 0.70
+    low: float = 0.10
+    high: float = 0.50
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.low <= 1.0:
@@ -28,14 +28,14 @@ def evaluate_risk(probability: float, thresholds: RiskThresholds) -> RiskDecisio
     if not 0.0 <= probability <= 1.0:
         raise ValueError("Fraud probability must be between 0 and 1.")
 
-    if probability < thresholds.low:
+    if probability <= thresholds.low:
         return RiskDecision(
             risk_level="LOW",
             action="APPROVE",
             message="Transaction approved",
         )
 
-    if probability < thresholds.high:
+    if probability <= thresholds.high:
         return RiskDecision(
             risk_level="MEDIUM",
             action="TRIGGER_MFA",
