@@ -11,8 +11,10 @@ from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBea
 from supabase import Client
 
 API_KEY_HEADER_NAME = "X-API-Key"
+ADMIN_API_KEY_HEADER_NAME = "X-Admin-Key"
 AUTHORIZATION_HEADER_NAME = "Authorization"
 _api_key_header = APIKeyHeader(name=API_KEY_HEADER_NAME, auto_error=False)
+_admin_api_key_header = APIKeyHeader(name=ADMIN_API_KEY_HEADER_NAME, auto_error=False)
 _bearer_header = HTTPBearer(auto_error=False)
 
 
@@ -40,6 +42,12 @@ class AuthSettings:
 class AuthContext:
     auth_method: str
     principal: str
+    email: str | None = None
+
+
+@dataclass(frozen=True)
+class AdminAuthSettings:
+    api_keys: tuple[str, ...]
 
 
 class SupabaseUserTokenVerifier:
@@ -96,6 +104,11 @@ def load_auth_settings() -> AuthSettings:
     return AuthSettings(mode=mode, api_keys=api_keys)
 
 
+def load_admin_auth_settings() -> AdminAuthSettings:
+    admin_api_keys = _parse_api_keys(os.getenv("BANKING_ADMIN_API_KEYS", "").strip())
+    return AdminAuthSettings(api_keys=admin_api_keys)
+
+
 def authenticate_prediction_request(
     request: Request,
     api_key: str | None = Security(_api_key_header),
@@ -107,7 +120,7 @@ def authenticate_prediction_request(
 
     if auth_settings.allow_api_key and api_key:
         if any(hmac.compare_digest(api_key, configured_key) for configured_key in auth_settings.api_keys):
-            auth_context = AuthContext(auth_method="api_key", principal="api_key_client")
+            auth_context = AuthContext(auth_method="api_key", principal="api_key_client", email=None)
             request.state.auth_context = auth_context
             return auth_context
 
@@ -118,7 +131,11 @@ def authenticate_prediction_request(
                 raise HTTPException(status_code=500, detail="JWT verification is not configured.")
 
             user_payload = verifier.verify_access_token(bearer_credentials.credentials)
-            auth_context = AuthContext(auth_method="jwt", principal=str(user_payload["id"]))
+            auth_context = AuthContext(
+                auth_method="jwt",
+                principal=str(user_payload["id"]),
+                email=user_payload.get("email"),
+            )
             request.state.auth_context = auth_context
             return auth_context
 
@@ -130,3 +147,46 @@ def authenticate_prediction_request(
         detail = "Invalid or missing Bearer token."
 
     raise HTTPException(status_code=401, detail=detail)
+
+
+def authenticate_banking_user(
+    request: Request,
+    bearer_credentials: HTTPAuthorizationCredentials | None = Security(_bearer_header),
+) -> AuthContext:
+    if not bearer_credentials or bearer_credentials.scheme.lower() != "bearer" or not bearer_credentials.credentials:
+        raise HTTPException(status_code=401, detail="Missing Bearer token.")
+
+    verifier: SupabaseUserTokenVerifier | None = getattr(request.app.state, "user_token_verifier", None)
+    if verifier is None:
+        raise HTTPException(status_code=500, detail="JWT verification is not configured.")
+
+    user_payload = verifier.verify_access_token(bearer_credentials.credentials)
+    auth_context = AuthContext(
+        auth_method="jwt",
+        principal=str(user_payload["id"]),
+        email=user_payload.get("email"),
+    )
+    request.state.auth_context = auth_context
+    return auth_context
+
+
+def authenticate_banking_admin_request(
+    request: Request,
+    admin_api_key: str | None = Security(_admin_api_key_header),
+) -> AuthContext:
+    admin_auth_settings: AdminAuthSettings | None = getattr(request.app.state, "admin_auth_settings", None)
+    if admin_auth_settings is None or not admin_auth_settings.api_keys:
+        raise HTTPException(
+            status_code=503,
+            detail="Admin authentication is not configured. Set BANKING_ADMIN_API_KEYS.",
+        )
+
+    if not admin_api_key:
+        raise HTTPException(status_code=401, detail="Missing admin API key.")
+
+    if any(hmac.compare_digest(admin_api_key, configured_key) for configured_key in admin_auth_settings.api_keys):
+        auth_context = AuthContext(auth_method="admin_api_key", principal="banking_admin")
+        request.state.auth_context = auth_context
+        return auth_context
+
+    raise HTTPException(status_code=401, detail="Invalid admin API key.")

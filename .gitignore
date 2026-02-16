@@ -5,3 +5,6 @@ __pycache__/
 cleaned_dataset/
 frontend/node_modules/
 frontend/dist/
+frontend/*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts

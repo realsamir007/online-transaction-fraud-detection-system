@@ -85,6 +85,14 @@ code {
   box-shadow: 0 10px 22px rgba(20, 36, 20, 0.06);
 }
 
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
 .panel-header h2 {
   margin: 0;
   font-size: 1.2rem;
@@ -111,6 +119,10 @@ code {
   display: grid;
   grid-template-columns: 1.2fr 0.8fr;
   gap: 1rem;
+}
+
+.banking-grid {
+  grid-template-columns: 1fr;
 }
 
 .grid {
@@ -194,6 +206,17 @@ button:disabled {
   margin-top: 0.8rem;
 }
 
+.account-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  gap: 0.8rem;
+}
+
+.account-grid div {
+  display: grid;
+  gap: 0.2rem;
+}
+
 .result-stack {
   display: grid;
   gap: 0.9rem;
@@ -225,6 +248,85 @@ button:disabled {
 .risk-high {
   background: #ffe0df;
   color: #85251f;
+}
+
+.risk-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  border-radius: 999px;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid transparent;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.risk-neutral {
+  background: #eef1ef;
+  color: #4b5b4c;
+}
+
+.transfer-actions {
+  display: flex;
+  gap: 0.65rem;
+  margin-top: 1rem;
+}
+
+.validation-box {
+  margin-top: 0.9rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  padding: 0.75rem;
+}
+
+.validation-box p {
+  margin: 0.25rem 0 0;
+}
+
+.validation-box.valid {
+  background: #e8f7ef;
+  border-color: #0b6c44;
+}
+
+.validation-box.invalid {
+  background: #fff1f1;
+  border-color: #b0342d;
+}
+
+.transfer-result {
+  margin-top: 0.9rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  padding: 0.75rem;
+  background: #fff;
+}
+
+.transfer-result p {
+  margin: 0.45rem 0 0;
+}
+
+.history-table-wrap {
+  overflow-x: auto;
+}
+
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.history-table th,
+.history-table td {
+  text-align: left;
+  padding: 0.55rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.history-table th {
+  color: var(--ink-muted);
+  font-weight: 600;
 }
 
 dl {
@@ -267,6 +369,10 @@ dd {
   .content-grid {
     grid-template-columns: 1fr;
   }
+
+  .account-grid {
+    grid-template-columns: repeat(2, minmax(140px, 1fr));
+  }
 }
 
 @media (max-width: 640px) {
@@ -285,9 +391,13 @@ dd {
   }
 
   .auth-actions,
-  .session-row {
+  .session-row,
+  .transfer-actions {
     flex-direction: column;
     align-items: stretch;
   }
-}
 
+  .account-grid {
+    grid-template-columns: 1fr;
+  }
+}

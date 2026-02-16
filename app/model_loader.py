@@ -56,4 +56,3 @@ def load_artifacts(models_dir: Path) -> ModelArtifacts:
         raise TypeError("Loaded model does not support probability predictions with predict_proba().")
 
     return ModelArtifacts(model=model, scaler=scaler, feature_names=feature_names)
-
