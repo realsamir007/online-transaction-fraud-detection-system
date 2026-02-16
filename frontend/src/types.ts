@@ -107,3 +107,63 @@ export type AdminUnblockUserResponse = {
   account_active: boolean;
   message: string;
 };
+
+export type AdminUserRow = {
+  user_id: string;
+  name: string;
+  email: string;
+  status: "ACTIVE" | "BLOCKED" | string;
+};
+
+export type AdminUsersResponse = {
+  items: AdminUserRow[];
+  limit: number;
+  offset: number;
+};
+
+export type AdminAccountRow = {
+  account_id: string;
+  account_number: string;
+  account_holder_name: string;
+  balance: number;
+  bank_code: string;
+  currency: string;
+  is_active: boolean;
+};
+
+export type AdminAccountsResponse = {
+  items: AdminAccountRow[];
+  limit: number;
+  offset: number;
+};
+
+export type AdminTransferRow = {
+  transfer_id: string;
+  sender: string;
+  receiver: string;
+  amount: number;
+  risk_score: number | null;
+  status: string;
+  timestamp: string;
+};
+
+export type AdminTransfersResponse = {
+  items: AdminTransferRow[];
+  limit: number;
+  offset: number;
+};
+
+export type AdminUpdateBalanceRequest = {
+  balance: number;
+};
+
+export type AdminUpdateBalanceResponse = {
+  account_id: string;
+  account_number: string;
+  balance: number;
+  message: string;
+};
+
+export type AuthView = "login" | "signup";
+
+export type AppRole = "guest" | "user" | "admin";

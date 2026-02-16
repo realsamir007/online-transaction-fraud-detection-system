@@ -232,6 +232,64 @@ class AdminUnblockUserResponse(BaseModel):
     message: str
 
 
+class AdminUserListItem(BaseModel):
+    user_id: str
+    name: str
+    email: str
+    status: str
+
+
+class AdminUsersResponse(BaseModel):
+    items: list[AdminUserListItem]
+    limit: int
+    offset: int
+
+
+class AdminAccountListItem(BaseModel):
+    account_id: str
+    account_number: str
+    account_holder_name: str
+    balance: float
+    bank_code: str
+    currency: str
+    is_active: bool
+
+
+class AdminAccountsResponse(BaseModel):
+    items: list[AdminAccountListItem]
+    limit: int
+    offset: int
+
+
+class AdminTransferListItem(BaseModel):
+    transfer_id: str
+    sender: str
+    receiver: str
+    amount: float
+    risk_score: float | None = None
+    status: str
+    timestamp: datetime
+
+
+class AdminTransfersResponse(BaseModel):
+    items: list[AdminTransferListItem]
+    limit: int
+    offset: int
+
+
+class AdminUpdateBalanceRequest(BaseModel):
+    balance: float = Field(..., ge=0.0)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AdminUpdateBalanceResponse(BaseModel):
+    account_id: str
+    account_number: str
+    balance: float
+    message: str
+
+
 def _parse_cors_origins(raw_origins: str | None) -> list[str]:
     if not raw_origins:
         return [
@@ -474,7 +532,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_parse_cors_origins(os.getenv("CORS_ALLOWED_ORIGINS")),
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -714,6 +772,69 @@ def admin_unblock_user(
         )
     except HTTPException:
         raise
+    except DatabaseError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/banking/admin/users", response_model=AdminUsersResponse)
+def admin_list_users(
+    _: AuthContext = Depends(authenticate_banking_admin_request),
+    limit: int = Query(DEFAULT_TRANSFER_HISTORY_LIMIT, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> AdminUsersResponse:
+    try:
+        items = app.state.banking_repo.list_bank_users(limit=limit, offset=offset)
+        return AdminUsersResponse(items=items, limit=limit, offset=offset)
+    except DatabaseError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/banking/admin/accounts", response_model=AdminAccountsResponse)
+def admin_list_accounts(
+    _: AuthContext = Depends(authenticate_banking_admin_request),
+    limit: int = Query(DEFAULT_TRANSFER_HISTORY_LIMIT, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> AdminAccountsResponse:
+    try:
+        items = app.state.banking_repo.list_bank_accounts(limit=limit, offset=offset)
+        return AdminAccountsResponse(items=items, limit=limit, offset=offset)
+    except DatabaseError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.patch("/banking/admin/accounts/{account_id}/balance", response_model=AdminUpdateBalanceResponse)
+def admin_update_account_balance(
+    account_id: str,
+    payload: AdminUpdateBalanceRequest,
+    _: AuthContext = Depends(authenticate_banking_admin_request),
+) -> AdminUpdateBalanceResponse:
+    try:
+        updated = app.state.banking_repo.admin_update_account_balance(
+            account_id=account_id,
+            balance=payload.balance,
+        )
+        return AdminUpdateBalanceResponse(
+            account_id=str(updated["id"]),
+            account_number=str(updated["account_number"]),
+            balance=float(updated["balance"]),
+            message="Account balance updated successfully.",
+        )
+    except DatabaseError as exc:
+        error_message = str(exc)
+        if "not found" in error_message.lower():
+            raise HTTPException(status_code=404, detail="Target account was not found.") from exc
+        raise HTTPException(status_code=500, detail=error_message) from exc
+
+
+@app.get("/banking/admin/transfers", response_model=AdminTransfersResponse)
+def admin_list_transfers(
+    _: AuthContext = Depends(authenticate_banking_admin_request),
+    limit: int = Query(DEFAULT_TRANSFER_HISTORY_LIMIT, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> AdminTransfersResponse:
+    try:
+        items = app.state.banking_repo.list_transfer_requests(limit=limit, offset=offset)
+        return AdminTransfersResponse(items=items, limit=limit, offset=offset)
     except DatabaseError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

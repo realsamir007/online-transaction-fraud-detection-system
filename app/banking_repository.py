@@ -156,6 +156,195 @@ class BankingRepository:
         )
         return self._single_row(result)
 
+    def list_bank_users(self, *, limit: int, offset: int) -> list[dict[str, Any]]:
+        end = offset + limit - 1
+        users_result = (
+            self.client.table("bank_users")
+            .select("*")
+            .order("created_at", desc=True)
+            .range(offset, end)
+            .execute()
+        )
+        users = self._rows(users_result)
+        if not users:
+            return []
+
+        user_ids = [str(row["id"]) for row in users if row.get("id")]
+        account_map: dict[str, dict[str, Any]] = {}
+        if user_ids:
+            accounts_result = (
+                self.client.table("bank_accounts")
+                .select("*")
+                .in_("user_id", user_ids)
+                .execute()
+            )
+            accounts = self._rows(accounts_result)
+            for account in accounts:
+                account_map[str(account["user_id"])] = account
+
+        output: list[dict[str, Any]] = []
+        for user in users:
+            user_id = str(user["id"])
+            account = account_map.get(user_id)
+            user_status = str(user.get("status") or "ACTIVE").upper()
+            is_account_active = bool(account.get("is_active", True)) if account else True
+            status = "BLOCKED" if user_status == "BLOCKED" or not is_account_active else "ACTIVE"
+            output.append(
+                {
+                    "user_id": user_id,
+                    "name": str(user.get("full_name") or "").strip() or "N/A",
+                    "email": str(user.get("email") or "").strip() or "N/A",
+                    "status": status,
+                }
+            )
+        return output
+
+    def list_bank_accounts(self, *, limit: int, offset: int) -> list[dict[str, Any]]:
+        end = offset + limit - 1
+        accounts_result = (
+            self.client.table("bank_accounts")
+            .select("*")
+            .order("created_at", desc=True)
+            .range(offset, end)
+            .execute()
+        )
+        accounts = self._rows(accounts_result)
+        if not accounts:
+            return []
+
+        user_ids = [str(row["user_id"]) for row in accounts if row.get("user_id")]
+        users_map: dict[str, dict[str, Any]] = {}
+        if user_ids:
+            users_result = (
+                self.client.table("bank_users")
+                .select("*")
+                .in_("id", user_ids)
+                .execute()
+            )
+            users = self._rows(users_result)
+            users_map = {str(row["id"]): row for row in users}
+
+        output: list[dict[str, Any]] = []
+        for account in accounts:
+            user_id = str(account["user_id"])
+            profile = users_map.get(user_id)
+            account_holder = "N/A"
+            if profile:
+                account_holder = (
+                    str(profile.get("full_name") or "").strip()
+                    or str(profile.get("email") or "").strip()
+                    or "N/A"
+                )
+            output.append(
+                {
+                    "account_id": str(account["id"]),
+                    "account_number": str(account["account_number"]),
+                    "account_holder_name": account_holder,
+                    "balance": float(account["balance"]),
+                    "bank_code": str(account["bank_code"]),
+                    "currency": str(account.get("currency") or self.config.default_currency),
+                    "is_active": bool(account.get("is_active", False)),
+                }
+            )
+        return output
+
+    def list_transfer_requests(self, *, limit: int, offset: int) -> list[dict[str, Any]]:
+        end = offset + limit - 1
+        transfer_result = (
+            self.client.table("transfer_requests")
+            .select("*")
+            .order("created_at", desc=True)
+            .range(offset, end)
+            .execute()
+        )
+        transfers = self._rows(transfer_result)
+        if not transfers:
+            return []
+
+        user_ids = {
+            str(row["sender_user_id"])
+            for row in transfers
+            if row.get("sender_user_id")
+        } | {
+            str(row["receiver_user_id"])
+            for row in transfers
+            if row.get("receiver_user_id")
+        }
+        users_map: dict[str, dict[str, Any]] = {}
+        if user_ids:
+            users_result = (
+                self.client.table("bank_users")
+                .select("*")
+                .in_("id", sorted(user_ids))
+                .execute()
+            )
+            users = self._rows(users_result)
+            users_map = {str(row["id"]): row for row in users}
+
+        def _display_name(user_id: object, bank_code: object, account_number: object) -> str:
+            profile = users_map.get(str(user_id))
+            base_name = (
+                str(profile.get("full_name") or "").strip()
+                if profile
+                else ""
+            ) or (
+                str(profile.get("email") or "").strip()
+                if profile
+                else ""
+            ) or "Unknown"
+            return f"{base_name} ({bank_code}/{account_number})"
+
+        output: list[dict[str, Any]] = []
+        for row in transfers:
+            fraud_probability = row.get("fraud_probability")
+            output.append(
+                {
+                    "transfer_id": str(row["id"]),
+                    "sender": _display_name(
+                        row.get("sender_user_id"),
+                        row.get("sender_bank_code"),
+                        row.get("sender_account_number"),
+                    ),
+                    "receiver": _display_name(
+                        row.get("receiver_user_id"),
+                        row.get("receiver_bank_code"),
+                        row.get("receiver_account_number"),
+                    ),
+                    "amount": float(row["amount"]),
+                    "risk_score": float(fraud_probability) if fraud_probability is not None else None,
+                    "status": str(row["status"]),
+                    "timestamp": row["created_at"],
+                }
+            )
+        return output
+
+    def admin_update_account_balance(self, *, account_id: str, balance: float) -> dict[str, Any]:
+        if balance < 0:
+            raise DatabaseError("Balance must be greater than or equal to 0.")
+
+        existing = self.get_account_by_id(account_id)
+        if not existing:
+            raise DatabaseError("Target account was not found.")
+
+        patch_payload = {
+            "balance": balance,
+            "updated_at": _utcnow_iso(),
+        }
+        try:
+            (
+                self.client.table("bank_accounts")
+                .update(patch_payload)
+                .eq("id", account_id)
+                .execute()
+            )
+        except Exception as exc:
+            raise DatabaseError(f"Failed to update account balance: {exc}") from exc
+
+        updated = self.get_account_by_id(account_id)
+        if not updated:
+            raise DatabaseError("Target account was not found.")
+        return updated
+
     def list_account_transfers(self, *, account_id: str, limit: int, offset: int) -> list[dict[str, Any]]:
         end = offset + limit - 1
         query = (
